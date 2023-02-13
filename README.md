@@ -12,6 +12,8 @@ flask_mysqldb: es la cual provee la coexion de MySQL con flask.
 
 <hr/>
 
+Pasos a seguir para montar laapp en un entorno:
+
 -Instalar administrador de base de datos para crearla y correr en local server (Para conectarse en remoto existen opciones como planetscale o cleverCloud), en mi caso utilice Xampp/phpadmin
 -Correr consultas de jornada_base.sql
 -Crear y activar entorno, instalar paquetes
