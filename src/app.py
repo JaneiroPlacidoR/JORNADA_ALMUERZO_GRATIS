@@ -1,214 +1,168 @@
-from flask import Flask,jsonify,request
+from flask import Flask, jsonify, request
 from flask_mysqldb import MySQL
-
 from config import config
-from validations import *
+from validations import (
+    validate_id, validate_nombre, validate_apellidos, validate_telefono, 
+    validate_correo, validate_edad, validate_direccion, validate_entrega, 
+    validate_observacion
+)
 
-app = Flask(__name__)
+def create_app():
+    app = Flask(__name__)
+    app.config.from_object(config['development'])
+    return app
 
-conexion = MySQL(app)
+app = create_app()
+mysql = MySQL(app)
 
-#Funcion para validar existencia de residente en la base de datos
-def existe_residente(id):
+def fetch_one(query, params=None):
+    cursor = mysql.connection.cursor()
+    cursor.execute(query, params or ())
+    return cursor.fetchone()
+
+def fetch_all(query, params=None):
+    cursor = mysql.connection.cursor()
+    cursor.execute(query, params or ())
+    return cursor.fetchall()
+
+def execute_query(query, params=None, commit=False):
+    cursor = mysql.connection.cursor()
+    cursor.execute(query, params or ())
+    if commit:
+        mysql.connection.commit()
+
+def format_residente(row):
+    if row:
+        return {
+            'id': row[0], 'nombre': row[1], 'apellidos': row[2], 'telefono': row[3],
+            'correo': row[4], 'edad': row[5], 'direccion': row[6],
+            'comida_entregada': row[7], 'observacion': row[8]
+        }
+    return None
+
+def validate_request_data():
+    validators = {
+        'id': validate_id, 'nombre': validate_nombre, 'apellidos': validate_apellidos,
+        'telefono': validate_telefono, 'correo': validate_correo, 'edad': validate_edad,
+        'direccion': validate_direccion, 'comida_entregada': validate_entrega,
+        'observacion': validate_observacion
+    }
+    errors = {field: validator(request.json[field]) for field, validator in validators.items() if validator(request.json[field])}
+    return errors
+
+@app.route('/residentes/<int:offset>', methods=['GET'])
+def obtener_residentes(offset):
     try:
-        cursor = conexion.connection.cursor()
-        sql = f"SELECT id, nombre, apellidos, telefono, correo, edad, direccion, comida_entregada, observacion FROM residente WHERE id = {id}"
-        cursor.execute(sql)
-        datos = cursor.fetchone()
-        if datos != None:
-            residente = {'id':datos[0],'nombre':datos[1],'apellidos':datos[2],'telefono':datos[3],'correo':datos[4],'edad':datos[5],'direccion':datos[6],'comida_entregada':datos[7],'observacion':datos[8]}
-            return residente
-        else:
-            return None
-    except Exception as e:
-        raise e
+        query = """SELECT id, nombre, apellidos, telefono, correo, edad, direccion, 
+                   comida_entregada, observacion, fecha FROM residente 
+                   ORDER BY fecha DESC LIMIT %s, 10"""
+        rows = fetch_all(query, (offset,))
+        residentes = [format_residente(row) for row in rows]
+        return jsonify({'residentes': residentes, 'mensaje': 'Residentes listados'})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
-#Funcion para mostrar si el 100% de los campos se introdujeron en el formato correcto
-def validateAll() -> bool:
-    try:
-        return (validate_nombre(request.json['nombre']) == None and validate_apellidos(request.json['apellidos']) == None and
-        validate_telefono(request.json['telefono']) == None and validate_correo(request.json['correo']) == None and validate_edad(request.json['edad']) == None and
-        validate_direccion(request.json['direccion']) == None and validate_entrega(request.json['comida_entregada']) == None and validate_observacion(request.json['observacion']) == None)
-    except Exception as e:
-        return False
-
-@app.route('/residentes/<actual>', methods=['GET'])
-def obtener_residentes(actual):
-    try:
-        
-        cursor = conexion.connection.cursor()
-        sql = f"SELECT id, nombre, apellidos, telefono, correo, edad, direccion, comida_entregada, observacion, fecha FROM residente ORDER BY fecha DESC LIMIT {actual},10"
-        cursor.execute(sql)
-        datos = cursor.fetchall()
-        residentes = []
-        for fila in datos:
-            residente = {'id':fila[0],'nombre':fila[1],'apellidos':fila[2],'telefono':fila[3],'correo':fila[4],'edad':fila[5],'direccion':fila[6],'comida_entregada':fila[7],'observacion':fila[8],'fecha':fila[9]}
-            residentes.append(residente)
-        return jsonify({'residentes':residentes,'mensaje':'Residentes listados'})
-
-    except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-
-    
-@app.route('/residente/<id>', methods=['GET'])
+@app.route('/residente/<int:id>', methods=['GET'])
 def obtener_residente(id):
     try:
-        residente = existe_residente(id)
-        if residente != None:
-            return jsonify({'residente': residente, 'mensaje': "Residente encontrado.", 'exito': True})
-        else:
-            return jsonify({'mensaje': "Residente no encontrado.", 'exito': False})
-    except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-    
+        query = "SELECT * FROM residente WHERE id = %s"
+        row = fetch_one(query, (id,))
+        residente = format_residente(row)
+        if residente:
+            return jsonify({'residente': residente, 'mensaje': 'Residente encontrado.', 'exito': True})
+        return jsonify({'mensaje': 'Residente no encontrado.', 'exito': False})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
 @app.route('/residentes', methods=['POST'])
 def registrar_residentes():
-    if (validateAll() and validate_id(request.json['id']) == None):
-        try:  
-            residente = existe_residente(request.json['id'])
-            if residente != None:
-                return jsonify({'mensaje': "ID ya existe, no se puede duplicar.", 'exito': False})
-            else:
-                is_comida_entregada = 0
-                if request.json['comida_entregada'] == True:
-                    is_comida_entregada = 1
-                else:
-                    is_comida_entregada = 0
-                   
-                cursor = conexion.connection.cursor()
-                sql = """INSERT INTO residente (id, nombre, apellidos, telefono, correo,
-                  edad, direccion, comida_entregada, observacion, fecha) 
-                VALUES ('{0}','{1}','{2}',{3},'{4}',{5},'{6}','{7}','{8}', NOW())""".format(request.json['id'],request.json['nombre'],
-                request.json['apellidos'],request.json['telefono'],request.json['correo'],request.json['edad'],
-                request.json['direccion'],is_comida_entregada,request.json['observacion'])
-                cursor.execute(sql)
-                conexion.connection.commit()  
-                return jsonify({'mensaje': "Residente registrado.", 'exito': True})
-        except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-    else:
-  
-        v_id, v_nombre, v_apellidos, v_telefono, v_correo, v_edad, v_direccion, v_comida_entregada, v_observacion  = [["id",validate_id(request.json['id'])],["nombre",validate_nombre(request.json['nombre'])] , ["apellidos",validate_apellidos(request.json['apellidos'])] ,["telefono",validate_telefono(request.json['telefono'])] , ["correo",validate_correo(request.json['correo'])],["edad",validate_edad(request.json['edad'])] ,["direccion",validate_direccion(request.json['direccion'])],["comida_entregada",validate_entrega(request.json['comida_entregada'])] , ["observacion",validate_observacion(request.json['observacion'])]]
-        errors = [v_id, v_nombre, v_apellidos, v_telefono, v_correo, v_edad, v_direccion, v_comida_entregada, v_observacion]
-        messages =[]
-        for item in errors:
-            if item is not None:
-             message = {f'{item[0]}':item[1]}
-             messages.append(message)
-        return jsonify({'errors messages':messages})
+    errors = validate_request_data()
+    if errors:
+        return jsonify({'error_messages': errors})
 
-        
+    try:
+        query = "SELECT id FROM residente WHERE id = %s"
+        if fetch_one(query, (request.json['id'],)):
+            return jsonify({'mensaje': 'ID ya existe, no se puede duplicar.', 'exito': False})
 
-@app.route('/residentes/<id>', methods=['PUT'])
+        is_comida_entregada = 1 if request.json['comida_entregada'] else 0
+        query = """INSERT INTO residente (id, nombre, apellidos, telefono, correo, edad, 
+                  direccion, comida_entregada, observacion, fecha) 
+                  VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())"""
+        params = (
+            request.json['id'], request.json['nombre'], request.json['apellidos'],
+            request.json['telefono'], request.json['correo'], request.json['edad'],
+            request.json['direccion'], is_comida_entregada, request.json['observacion']
+        )
+        execute_query(query, params, commit=True)
+        return jsonify({'mensaje': 'Residente registrado.', 'exito': True})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
+
+@app.route('/residentes/<int:id>', methods=['PUT'])
 def actualizar_residentes(id):
+    errors = validate_request_data()
+    if errors:
+        return jsonify({'error_messages': errors})
 
-    if (validateAll()):
-        try:  
-            residente = existe_residente(id)
-            if residente != None:
+    try:
+        query = "SELECT id FROM residente WHERE id = %s"
+        if not fetch_one(query, (id,)):
+            return jsonify({'mensaje': 'Residente no encontrado.', 'exito': False})
 
-                is_comida_entregada = 0
-                if request.json['comida_entregada'] == True:
-                    is_comida_entregada = 1
-                else:
-                    is_comida_entregada = 0
+        is_comida_entregada = 1 if request.json['comida_entregada'] else 0
+        query = """UPDATE residente SET nombre = %s, apellidos = %s, telefono = %s, 
+                  correo = %s, edad = %s, direccion = %s, comida_entregada = %s, 
+                  observacion = %s WHERE id = %s"""
+        params = (
+            request.json['nombre'], request.json['apellidos'], request.json['telefono'],
+            request.json['correo'], request.json['edad'], request.json['direccion'],
+            is_comida_entregada, request.json['observacion'], id
+        )
+        execute_query(query, params, commit=True)
+        return jsonify({'mensaje': 'Residente actualizado.', 'exito': True})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
-                cursor = conexion.connection.cursor()
-                sql = f"""UPDATE residente SET id = '{id}', nombre = '{request.json['nombre']}',
-                  apellidos = '{ request.json['apellidos']}', telefono = '{request.json['telefono']}',
-                  correo = '{request.json['correo']}', edad = '{request.json['edad']}', direccion = '{request.json['direccion']}'
-                  , comida_entregada = '{is_comida_entregada}', observacion = '{request.json['observacion']}'"""
-                cursor.execute(sql)
-                conexion.connection.commit()  
-                return jsonify({'mensaje': "Residente actualizado.", 'exito': True})            
-            else:
-                return jsonify({'mensaje': "Residente no encontrado.", 'exito': False})
-        except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-    else:
-
-        v_nombre, v_apellidos, v_telefono, v_correo, v_edad, v_direccion, v_comida_entregada, v_observacion  = [["nombre",validate_nombre(request.json['nombre'])] , ["apellidos",validate_apellidos(request.json['apellidos'])] ,["telefono",validate_telefono(request.json['telefono'])] , ["correo",validate_correo(request.json['correo'])],["edad",validate_edad(request.json['edad'])] ,["direccion",validate_direccion(request.json['direccion'])],["comida_entregada",validate_entrega(request.json['comida_entregada'])] , ["observacion",validate_observacion(request.json['observacion'])]]
-        errors = [v_id, v_nombre, v_apellidos, v_telefono, v_correo, v_edad, v_direccion, v_comida_entregada, v_observacion]
-        messages =[]
-        for item in errors:
-            if item is not None:
-             message = {f'{item[0]}':item[1]}
-             messages.append(message)
-        return jsonify({'errors messages':messages})
-
-        
-@app.route('/residentes/<id>', methods=['DELETE'])
+@app.route('/residentes/<int:id>', methods=['DELETE'])
 def borrar_residentes(id):
+    try:
+        query = "DELETE FROM residente WHERE id = %s"
+        execute_query(query, (id,), commit=True)
+        return jsonify({'mensaje': 'Residente borrado.', 'exito': True})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
-        try:  
-            residente = existe_residente(id)
-            if residente != None:
-                cursor = conexion.connection.cursor()
-                sql = f"DELETE FROM residente WHERE id = '{id}'"
-                cursor.execute(sql)
-                conexion.connection.commit()  
-                return jsonify({'mensaje': "Residente Borrado.", 'exito': True})            
-            else:
-                return jsonify({'mensaje': "Residente no encontrado.", 'exito': False})
-        except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-        
-@app.route('/residentes/search/<word>' , methods=['GET'])
+@app.route('/residentes/search/<string:word>', methods=['GET'])
 def search_by_correo_or_name(word):
     try:
-        cursor = conexion.connection.cursor()
-        sql = f"SELECT id, nombre, apellidos, telefono, correo, edad, direccion, comida_entregada, observacion FROM residente WHERE nombre LIKE '%{word}%' OR correo LIKE '%{word}%'"
-        cursor.execute(sql)
-        datos = cursor.fetchall()
-        residentes = []
-        for fila in datos:
-            residente = {'id':fila[0],'nombre':fila[1],'apellidos':fila[2],'telefono':fila[3],'correo':fila[4],'edad':fila[5],'direccion':fila[6],'comida_entregada':fila[7],'observacion':fila[8]}
-            residentes.append(residente)
-        return jsonify({'mensaje':'Residentes que coinciden con tu busqueda','residentes':residentes}) 
-        
-    except Exception as e:
-        raise e
+        query = """SELECT * FROM residente WHERE nombre LIKE %s OR correo LIKE %s"""
+        rows = fetch_all(query, (f"%{word}%", f"%{word}%"))
+        residentes = [format_residente(row) for row in rows]
+        return jsonify({'mensaje': 'Resultados de búsqueda', 'residentes': residentes})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
 @app.route('/residentes/byalphabet', methods=['GET'])
 def obtener_residentes_alph():
-    try:
-        cursor = conexion.connection.cursor()
-        sql = f"SELECT id, nombre, apellidos, telefono, correo, edad, direccion, comida_entregada, observacion, fecha FROM residente ORDER BY nombre ASC"
-        cursor.execute(sql)
-        datos = cursor.fetchall()
-        residentes = []
-        for fila in datos:
-            residente = {'id':fila[0],'nombre':fila[1],'apellidos':fila[2],'telefono':fila[3],'correo':fila[4],'edad':fila[5],'direccion':fila[6],'comida_entregada':fila[7],'observacion':fila[8],'fecha':fila[9]}
-            residentes.append(residente)
-        return jsonify({'residentes':residentes,'mensaje':'Residentes listados'})
-
-    except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-
+    return obtener_residentes_ordered_by('nombre ASC')
 
 @app.route('/residentes/byage', methods=['GET'])
 def obtener_residentes_age():
+    return obtener_residentes_ordered_by('edad DESC')
+
+def obtener_residentes_ordered_by(order_by):
     try:
-        cursor = conexion.connection.cursor()
-        sql = f"SELECT id, nombre, apellidos, telefono, correo, edad, direccion, comida_entregada, observacion, fecha FROM residente ORDER BY edad DESC"
-        cursor.execute(sql)
-        datos = cursor.fetchall()
-        residentes = []
-        for fila in datos:
-            residente = {'id':fila[0],'nombre':fila[1],'apellidos':fila[2],'telefono':fila[3],'correo':fila[4],'edad':fila[5],'direccion':fila[6],'comida_entregada':fila[7],'observacion':fila[8],'fecha':fila[9]}
-            residentes.append(residente)
-        return jsonify({'residentes':residentes,'mensaje':'Residentes listados'})
-
-    except Exception as e:
-            return jsonify({'mensaje': 'Error, es posible que no se haya conectado a la base de datos correctamnte', 'exito': False})
-
+        query = f"SELECT * FROM residente ORDER BY {order_by}"
+        rows = fetch_all(query)
+        residentes = [format_residente(row) for row in rows]
+        return jsonify({'residentes': residentes, 'mensaje': 'Residentes listados'})
+    except Exception:
+        return jsonify({'mensaje': 'Error al conectar con la base de datos', 'exito': False})
 
 def pagina_no_encontrada(error):
-    return jsonify({'mensaje':'Ruta erronea'})
-
+    return jsonify({'mensaje': 'Ruta errónea'})
 
 if __name__ == '__main__':
-    app.config.from_object(config['development'])
     app.register_error_handler(404, pagina_no_encontrada)
     app.run()
